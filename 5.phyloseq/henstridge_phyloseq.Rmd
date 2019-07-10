@@ -40,6 +40,9 @@ working_directory = '/Users/markread/dropbox_usyd/projects/henstridge/5.phyloseq
 setwd(working_directory)  # If running individual chunks from within R
 knitr::opts_chunk$set(root.dir = working_directory)  # If compiling Rmd documnet through Knit. 
 
+source('../commons.R')
+source('../microbial_ecology_tools/microbial_ecology_functions.R')
+
 theme_set(theme_grey())  # Color scheme for ggplot2
 ```
 
@@ -68,6 +71,7 @@ metadata_tab = read.table("../mapping_file.txt", check.names=FALSE, header=TRUE,
                           comment.char='^')  
 metadata_tab = as.data.frame(metadata_tab)  # Conversion needed by phyloseq. 
 rownames(metadata_tab) <- metadata_tab$Sample
+metadata_tab$Donor = factor(metadata_tab$Donor, ordered = TRUE, levels = c('NC_Sed', 'NC_Ex', 'HF_Sed', 'HF_Ex'))
 # Sanity check
 dim(metadata_tab)
 colnames(metadata_tab)
@@ -102,13 +106,15 @@ Donor = sample_data(phylo_post)$Donor
 sample_depth_df = data.frame(Sample, Donor, Num_Reads)
 
 # Plot with series annotated
-p = ggplot(sample_depth_df, aes(x=Donor, y=Num_Reads, color=Donor))
-p + geom_boxplot(outlier.size=NA) +  # Turn off outliers, as we plot each datapoint below.
+p = ggplot(sample_depth_df, aes(x=Donor, y=Num_Reads, color=Donor)) +
+  geom_boxplot(outlier.size=NA) +  # Turn off outliers, as we plot each datapoint below.
+  scale_colour_manual(values=col_per_group) +
   geom_jitter(shape=16, position=position_jitter(0.3), size=4)
 ggsave("post_gavage_sampling_depth_Donor_ANNOTATED.pdf")
 # Plot for publication. 
-p = ggplot(sample_depth_df, aes(x=Donor, y=Num_Reads, color=Donor))
-p + geom_boxplot(outlier.shape = NA) +  # Turn off outliers, as we plot each datapoint below. 
+p = ggplot(sample_depth_df, aes(x=Donor, y=Num_Reads, color=Donor)) +
+    geom_boxplot(outlier.shape = NA) +  # Turn off outliers, as we plot each datapoint below. 
+    scale_colour_manual(values=col_per_group) +
     geom_jitter(shape=16, position=position_jitter(0.3), size=1) +
     ylab('Number of sequences') +
     theme(text = element_text(size=8),
@@ -172,7 +178,8 @@ p = plot_richness(phylo_post, measures=c("Observed","Shannon","InvSimpson"), col
     shape = 1,
     fill = NA
     ) + 
-    scale_shape(solid = FALSE)
+    scale_shape(solid = FALSE) +
+    scale_colour_manual(values=col_per_group)
 # Change the order of the samples on the x axis to be listed by experimental group. This was manually determined in the mapping file: "SortOrder"
 p$data$sample = as.character(p$data$samples)  # "Sample" here is data-set specific. It's the dataframe column being plotted on X
 p$data$sample = factor(p$data$samples, levels=desired_col_order)
@@ -187,7 +194,8 @@ p = p + theme(legend.position="none",
               text = element_text(size=9),
               axis.title = element_text(size=8),
               axis.title.x = element_blank()  # Turn off x axis label. 
-              )
+              ) + 
+    scale_colour_manual(values=col_per_group)
 ggsave("post_gavage_alpha_diversity.pdf", width=70, height=40, units='mm')
 
 #### Is there any statistically significant difference between groups based on alpha diversity?
