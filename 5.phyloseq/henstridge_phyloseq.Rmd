@@ -1,0 +1,293 @@
+---
+title: "Microbial community profiling"
+author: "Mark N. Read"
+date: "17/04/2019"
+output: 
+  html_document:
+    number_sections: true
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+<!-- Scroll code through X axis, rather than spill onto new line-->
+<style>
+pre {
+  overflow-x: auto;
+}
+pre code {
+  word-wrap: normal;
+  white-space: pre;
+}
+</style>
+
+
+
+```{r}
+rm(list=ls())  # Clean environment
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(phyloseq)
+library(vegan)  # Adonis function.  
+require(gtools)  # Mixedsort
+library(ggplot2)
+library(stats)
+
+# Change this if you attept to run from another location. 
+working_directory = '/Users/markread/dropbox_usyd/projects/henstridge/5.phyloseq/'
+setwd(working_directory)  # If running individual chunks from within R
+knitr::opts_chunk$set(root.dir = working_directory)  # If compiling Rmd documnet through Knit. 
+
+theme_set(theme_grey())  # Color scheme for ggplot2
+```
+
+```{r import}
+seq_table = read.table('../4.dada2/seqtab-nochim.txt', 
+                       check.names=FALSE)  # Not checking names because samples begin with numbers.
+otu_tab = otu_table(seq_table, taxa_are_rows=TRUE)
+# Sanity check
+dim(otu_tab)  
+colnames(otu_tab) 
+
+# Import taxonomy table. Cross-references "otus" (sequences if from dada2) with taxonomic determination. 
+tax_mat = read.table('../4.dada2/seqs_taxonomy.txt', row.names=1, sep=',', check.names=FALSE, 
+                     colClasses="character")  # Don't convert strings to factors. 
+tax_mat = as.matrix(tax_mat)  # Conversion needed by phyloseq. 
+dim(tax_mat)  # Sanity check
+colnames(tax_mat)
+typeof(tax_mat)  # Should be "character"
+tax_tab = tax_table(tax_mat)  # Convert to phyloseq object
+
+
+# Import mapping file
+metadata_tab = read.table("../mapping_file.txt", check.names=FALSE, header=TRUE, sep='\t',
+                          colClasses="character",  # Don't convert strings to factors. 
+                          # First header line starts with '#' for qiime compatibiity. Don't ignore, so set to nonsensical value
+                          comment.char='^')  
+metadata_tab = as.data.frame(metadata_tab)  # Conversion needed by phyloseq. 
+rownames(metadata_tab) <- metadata_tab$Sample
+# Sanity check
+dim(metadata_tab)
+colnames(metadata_tab)
+metadata_df = sample_data(metadata_tab)
+
+
+# Build a phyloseq object. 
+sample_names(otu_tab)  # Sanity check
+sample_names(metadata_df)
+phylo = phyloseq(otu_tab, tax_tab, metadata_df)
+
+# Filter into pre-gavage and post-gavage samples
+phylo_pre = subset_samples(phylo, SampleTime=='pre')
+phylo_post = subset_samples(phylo, SampleTime=='post')
+# Exclude duplicates from analysis - they are technical replicates of the same animals, and we do not wish to bias 
+# the analysis by including the same animal twice. 
+phylo_post = subset_samples(phylo_post, Duplicate=='No') 
+```
+
+# Verify no significant difference in sequencing depth per group
+
+We wish to attribute any changes observed between samples to the donor group. 
+It is therefore important to rule out differences in sequencing depth (number of sequences obtained per experimental group) as a potential confounding factor. 
+The box plot and permanova confirm sequencing depth cannot be attributed to donor group. 
+
+```{r sampling_depth}
+# =================
+# Check that sampling depth (number of OTU reads recorded for each sample) does not differ between groups
+Num_Reads = colSums(otu_table(phylo_post))
+Sample = sample_data(phylo_post)$Sample
+Donor = sample_data(phylo_post)$Donor
+sample_depth_df = data.frame(Sample, Donor, Num_Reads)
+
+# Plot with series annotated
+p = ggplot(sample_depth_df, aes(x=Donor, y=Num_Reads, color=Donor))
+p + geom_boxplot(outlier.size=NA) +  # Turn off outliers, as we plot each datapoint below.
+  geom_jitter(shape=16, position=position_jitter(0.3), size=4)
+ggsave("post_gavage_sampling_depth_Donor_ANNOTATED.pdf")
+# Plot for publication. 
+p = ggplot(sample_depth_df, aes(x=Donor, y=Num_Reads, color=Donor))
+p + geom_boxplot(outlier.shape = NA) +  # Turn off outliers, as we plot each datapoint below. 
+    geom_jitter(shape=16, position=position_jitter(0.3), size=1) +
+    ylab('Number of sequences') +
+    theme(text = element_text(size=8),
+          legend.position="none",
+          axis.ticks = element_blank(),  # Turn off black tick marks.
+          axis.text.x = element_blank()  # Turn off tick label titles.
+          )
+ggsave("post_gavage_sampling_depth_Donor.pdf", height=50, width=60, units='mm')
+
+# Check significance. 
+# Adonis is a stochastic algorithm.
+# Ensure consistent results. I've checked multiple different seeds, result is consistently statistically insignificant. 
+set.seed(999)
+adonis(Num_Reads ~ Donor, data=sample_depth_df, method="euclidean")  # performs a permanova. 
+sink("post_gavage_sampling_depth_Donor_permanova.txt")  # Write to file. 
+adonis(Num_Reads ~ Donor, data=sample_depth_df, method="euclidean")
+sink()
+```
+
+
+# Sequencing depth was sufficient to identify all major taxa present
+
+Another potential confounding factor is if the sequencing depth was not a sufficient sampling of all microbes in the environment. 
+If we did not sequence deep enough, then it is possible that observed differences between groups could stem from not observing microbes *that were in fact present had we only looked deeper*.
+We test this by sub-sampling each sample and counting how the number of unique taxa identified grows with the number of sequences identified. 
+We hope to observe a plateau, through which we can argue that further sampling would not have yielded any previously unobserved microbes. 
+
+We find that each sample achieves a plateau. 
+
+```{r rarefaction}
+# =================
+# Rarefaction curves. Check that we aren't sub-sampling to the point of missing OTUs/sequences. 
+source('../microbial_ecology_tools/ggrare.R')
+p = ggrare(phylo_post, step = 1000, line_weight=0.4,
+           label= NULL, # 'Sample', 
+           color='Donor', plot = TRUE, parallel = TRUE, se = FALSE)
+p + theme(text = element_text(size=9)) +
+ggsave("post_gavage_rarefaction_curves-ANNOTEATED.pdf")
+# Plot for publication.
+p + theme(legend.position="none", text = element_text(size=9), axis.title = element_text(size=8)) +
+    theme(plot.margin=margin(t = 4, r = 15, b = 4, l = 4, unit = "pt"))  # Add a bit of extra whitespace on right. 
+ggsave("post_gavage_rarefaction_curves.pdf", height=50, width=60, units='mm')  
+```
+
+# Alpha diversity analyses
+
+```{r alpha_diversity}
+# Change the order of samples to group by Donor. 
+sd = sample_data(phylo_post)
+sd = 
+sorted_sd = sd[order(as.numeric(sd$SortOrder)), ]  # Ordered by SortOrder
+desired_col_order = rownames(sorted_sd)  
+
+# Plot richness
+p = plot_richness(phylo_post, measures=c("Observed","Shannon","InvSimpson"), color="Donor", x='Donor') + 
+    stat_summary(  # Plot means. 
+    geom = "point",
+    fun.y = "mean",
+    col = "black",
+    size = 2,
+    shape = 1,
+    fill = NA
+    ) + 
+    scale_shape(solid = FALSE)
+# Change the order of the samples on the x axis to be listed by experimental group. This was manually determined in the mapping file: "SortOrder"
+p$data$sample = as.character(p$data$samples)  # "Sample" here is data-set specific. It's the dataframe column being plotted on X
+p$data$sample = factor(p$data$samples, levels=desired_col_order)
+# p = p + geom_boxplot(outler.shape = NA, shape=NA) +
+        #geom_point(size=1.0, shape=21, fill=NA)
+    
+ggsave("post_gavage_alpha_diversity-ANNOTATED.pdf", width=15, height=7)  # Adjust the width of the saved plot, stop sample IDs being squeezed. 
+# Plot for publication.
+p = p + theme(legend.position="none",
+              axis.text.x = element_blank(),  # Turn off tick label titles.
+              axis.ticks = element_blank(),  # Turn off black tick marks.
+              text = element_text(size=9),
+              axis.title = element_text(size=8),
+              axis.title.x = element_blank()  # Turn off x axis label. 
+              )
+ggsave("post_gavage_alpha_diversity.pdf", width=70, height=40, units='mm')
+
+#### Is there any statistically significant difference between groups based on alpha diversity?
+# Ignore the warning about singletons - pretty sure this is because we use DADA2 which doesn't produce as many 
+# singletons as previous technologioes. 
+# Returns data frame (and renames samples starting with numbers), but preserves order of input data. 
+richness = estimate_richness(phylo_post)  # Actually used in the plot_richness function above. Same data. 
+richness$Donor = sample_data(phylo_post)$Donor  # Add a column?s
+
+# Perform a PERMANOVA to seek statistically significant differences in groups, in terms of alpha diversity.
+# This does not say which groups are different, only if there are differences. 
+adonis(Observed ~ Donor, data=richness, method="euclidean")  # Print to the notebook. 
+adonis(Shannon ~ Donor, data=richness, method="euclidean")  # Print to the notebook. 
+adonis(InvSimpson ~ Donor, data=richness, method="euclidean")  # Print to the notebook. 
+# Repeat, but save to file system. 
+sink('post_gavage_alpha_diversity_permanova.txt')
+cat('Observed taxa\n')
+adonis(Observed ~ Donor, data=richness, method="euclidean")  # Print to the notebook. 
+cat('\n\nShannon taxa\n')
+adonis(Shannon ~ Donor, data=richness, method="euclidean")  # Print to the notebook. 
+cat('\n\nInverse Simpson taxa\n')
+adonis(InvSimpson ~ Donor, data=richness, method="euclidean")  # Print to the notebook. 
+sink()
+```
+
+We found statistically significant differences between groups. 
+Seek now which groups those differences arise from. Writes to file. 
+
+```{r alpha_stats}
+stat = function(metric, group1_label, group2_label) {
+  group1 = richness[richness$Donor == group1_label, metric]
+  group2 = richness[richness$Donor == group2_label, metric]
+  ks = ks.test(x=group1, y=group2, alternative='two.sided')  
+  pval = round(ks$p.value, digits=3)  # Three decimal places. 
+  if (pval < 0.05 | TRUE) {
+    print(paste(metric, ':', group1_label, 'vs', group2_label, '=', 
+                pval,
+                ' - KS test, two sided', sep=' '))
+  }
+}
+
+sink('post_gavage_alpha_diversity_statistics.txt')
+for (metric in c('Observed', 'Shannon', 'InvSimpson')) {
+  stat(metric, 'HF_Ex', 'HF_Sed')
+  stat(metric, 'HF_Ex', 'NC_Ex')
+  stat(metric, 'HF_Ex', 'NC_Sed')
+  
+  stat(metric, 'HF_Sed', 'NC_Ex')
+  stat(metric, 'HF_Sed', 'NC_Sed')
+  
+  stat(metric, 'NC_Ex', 'NC_Sed')
+  print('')
+}
+sink()
+```
+
+```{r stacked_bargraphs}
+phylo_pre_relab = transform_sample_counts(phylo_pre, function(x) 100 * x/sum(x))
+phylo_post_relab = transform_sample_counts(phylo_post, function(x) 100 * x/sum(x))
+
+# Taxa bar plots
+# Phylum level
+p = plot_bar(phylo_post_relab, fill="Phylum")
+# Change the order of the samples on the x axis to be listed by experimental group. This was manually determined in the mapping file: "SortOrder"
+p$data$Sample = as.character(p$data$Sample)  # "Sample" here is data-set specific. It's the dataframe column being plotted on X
+p$data$Sample = factor(p$data$Sample, levels=desired_col_order)
+p + ylab("Relative Abundance (%)")
+ggsave("post_gavage_taxa_bargraph_phylum-ANNOTATED.pdf")
+# Plot for publication.
+p + theme(axis.text.x = element_blank(),  # Turn off tick label titles.
+          axis.ticks = element_blank(),  # Turn off black tick marks.
+          text = element_text(size=9),
+          axis.title = element_text(size=8),
+          axis.title.x = element_blank(),  # Turn off X axis label. Obvious that they're samples. 
+          legend.key.size = unit(4, "mm"),
+          legend.text=element_text(size=7),
+          legend.title=element_text(size=7)
+          ) +
+    ylab('Relative abundance (%)')
+ggsave("post_gavage_taxa_bargraph_phylum.pdf", width=170, height=45, units='mm')
+```
+
+```{r stacked_bargraphs_family}
+# Family level
+p = plot_bar(phylo_post_relab, fill="Family")
+# Change the order of the samples on the x axis to be listed by experimental group. This was manually determined in the mapping file: "SortOrder"
+p$data$Sample = as.character(p$data$Sample)  # "Sample" here is data-set specific. It's the dataframe column being plotted on X
+p$data$Sample = factor(p$data$Sample, levels=desired_col_order)
+p + ylab("Relative Abundance (%)")
+ggsave("post_gavage_taxa_bargraph_family-ANNOTATED.pdf") 
+# Plot for publication.
+p + theme(axis.text.x = element_blank(),  # Turn off tick label titles.
+          axis.ticks = element_blank(),  # Turn off black tick marks.
+          text = element_text(size=9),
+          axis.title = element_text(size=8),
+          axis.title.x = element_blank(),  # Turn off X axis label. Obvious that they're samples. 
+          legend.key.size = unit(2, "mm"),
+          legend.text=element_text(size=7),
+          legend.title=element_text(size=7)
+          ) +
+    ylab('Relative abundance (%)')
+ggsave("post_gavage_taxa_bargraph_family.pdf", width=180, height=60, units='mm')
+```
