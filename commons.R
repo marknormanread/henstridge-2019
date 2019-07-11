@@ -8,8 +8,8 @@ col_per_group = c(
   'Ex' = '#008E83',
   
   # Full toxicity (three levels)
-  'NC_Sed' = '#d98ec5',
-  'NC_Ex' = '#26b3c5',
-  'HF_Sed' = '#7ebb2e',
-  'HF_Ex' = '#f78c80'
+  'NC_Sed' = '#D190C4',
+  'NC_Ex' = '#4BB0C4',
+  'HF_Sed' = '#88BB39',
+  'HF_Ex' = '#ED9181'
 )
