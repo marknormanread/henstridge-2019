@@ -112,6 +112,7 @@ p = ggplot(sample_depth_df, aes(x=Donor, y=Num_Reads, color=Donor)) +
   scale_colour_manual(values=col_per_group) +
   geom_jitter(shape=16, position=position_jitter(0.3), size=4)
 ggsave("post_gavage_sampling_depth_Donor_ANNOTATED.pdf")
+print(p)
 # Plot for publication. 
 p = ggplot(sample_depth_df, aes(x=Donor, y=Num_Reads, color=Donor)) +
     geom_boxplot(outlier.shape = NA) +  # Turn off outliers, as we plot each datapoint below. 
@@ -124,6 +125,7 @@ p = ggplot(sample_depth_df, aes(x=Donor, y=Num_Reads, color=Donor)) +
           axis.text.x = element_blank()  # Turn off tick label titles.
           )
 ggsave("post_gavage_sampling_depth_Donor.pdf", height=50, width=60, units='mm')
+print(p)
 
 # Check significance. 
 # Adonis is a stochastic algorithm.
@@ -188,7 +190,7 @@ p$data$sample = as.character(p$data$samples)  # "Sample" here is data-set specif
 p$data$sample = factor(p$data$samples, levels=desired_col_order)
 # p = p + geom_boxplot(outler.shape = NA, shape=NA) +
         #geom_point(size=1.0, shape=21, fill=NA)
-    
+p    
 ggsave("post_gavage_alpha_diversity-ANNOTATED.pdf", width=15, height=7)  # Adjust the width of the saved plot, stop sample IDs being squeezed. 
 # Plot for publication.
 p = p + theme(legend.position="none",
@@ -199,6 +201,7 @@ p = p + theme(legend.position="none",
               axis.title.x = element_blank()  # Turn off x axis label. 
               ) + 
     scale_colour_manual(values=col_per_group)
+p
 ggsave("post_gavage_alpha_diversity.pdf", width=70, height=40, units='mm')
 
 #### Is there any statistically significant difference between groups based on alpha diversity?
