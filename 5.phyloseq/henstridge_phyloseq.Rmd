@@ -97,6 +97,7 @@ We wish to attribute any changes observed between samples to the donor group.
 It is therefore important to rule out differences in sequencing depth (number of sequences obtained per experimental group) as a potential confounding factor. 
 The box plot and permanova confirm sequencing depth cannot be attributed to donor group. 
 
+
 ```{r sampling_depth}
 # =================
 # Check that sampling depth (number of OTU reads recorded for each sample) does not differ between groups
@@ -130,7 +131,7 @@ ggsave("post_gavage_sampling_depth_Donor.pdf", height=50, width=60, units='mm')
 set.seed(999)
 adonis(Num_Reads ~ Donor, data=sample_depth_df, method="euclidean")  # performs a permanova. 
 sink("post_gavage_sampling_depth_Donor_permanova.txt")  # Write to file. 
-adonis(Num_Reads ~ Donor, data=sample_depth_df, method="euclidean")
+print(adonis(Num_Reads ~ Donor, data=sample_depth_df, method="euclidean"))
 sink()
 ```
 
@@ -150,12 +151,14 @@ We find that each sample achieves a plateau.
 source('../microbial_ecology_tools/ggrare.R')
 p = ggrare(phylo_post, step = 1000, line_weight=0.4,
            label= NULL, # 'Sample', 
-           color='Donor', plot = TRUE, parallel = TRUE, se = FALSE)
-p + theme(text = element_text(size=9)) +
+           color='Donor', col_per_group = col_per_group, plot = TRUE, parallel = TRUE, se = FALSE)
+p = p + theme(text = element_text(size=9))
 ggsave("post_gavage_rarefaction_curves-ANNOTEATED.pdf")
 # Plot for publication.
-p + theme(legend.position="none", text = element_text(size=9), axis.title = element_text(size=8)) +
+p = p + 
+    theme(legend.position="none", text = element_text(size=9), axis.title = element_text(size=8)) +
     theme(plot.margin=margin(t = 4, r = 15, b = 4, l = 4, unit = "pt"))  # Add a bit of extra whitespace on right. 
+p
 ggsave("post_gavage_rarefaction_curves.pdf", height=50, width=60, units='mm')  
 ```
 
