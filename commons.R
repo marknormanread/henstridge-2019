@@ -3,15 +3,22 @@ col_per_group = c(
   'NC' = '#1F618D',
   'HF' = '#922B21',
   
-  # Simple toxicity (severe vs non-severe)
   'Sed' = '#A6ACAF',
   'Ex' = '#34495E',
   
-  # # Full toxicity (three levels)
   'NC_Sed' = '#85C1E9',
   'NC_Ex' = '#1F618D',
   'HF_Sed' = '#F1948A',
-  'HF_Ex' = '#922B21'
+  'HF_Ex' = '#922B21',
+  
+  'cage_1' = '#111111',
+  'cage_2' = '#222222',
+  'cage_3' = '#333333',
+  'cage_4' = '#444444',
+  'cage_5' = '#555555',
+  'cage_6A' = '#666666',
+  'cage_6B' = '#777777',
+  'cage_7' = '#888888'
   
   
   # 'HF' = '#C34A36',
