@@ -2,8 +2,6 @@
 # https://benjjneb.github.io/dada2/tutorial.html
 library(dada2)
 
-setwd("/Users/markread/dropbox_usyd/projects/henstridge/4.dada2")
-
 path = "../1.raw"
 list.files(path)
 
@@ -108,7 +106,7 @@ head(track)
 
 
 # -----------------------
-taxa <- assignTaxonomy(seqtab.nochim, "/Users/markread/Dropbox (Sydney Uni)/projects/micro_ecology_resources/referenceDBs/dada2/gg_13_8_train_set_97.fa.gz", multithread=TRUE)
+taxa <- assignTaxonomy(seqtab.nochim, "referenceDBs/dada2/gg_13_8_train_set_97.fa.gz", multithread=TRUE)
 
 
 
@@ -127,12 +125,12 @@ write.table(taxa, file="seqs_taxonomy.txt", sep=",", quote=FALSE)
 
 
 # theme_set(theme_bw())
-library(phyloseq); packageVersion("phyloseq")
-library(ggplot2); packageVersion("ggplot2")
-theme_set(theme_bw())
+# library(phyloseq); packageVersion("phyloseq")
+# library(ggplot2); packageVersion("ggplot2")
+# theme_set(theme_bw())
 
-biom_file = import_biom(BIOMfilename='/Users/markread/dropbox_usyd/projects/henstridge/4.otus/otu_table_filtered_json.biom')
+# biom_file = import_biom(BIOMfilename='/Users/markread/dropbox_usyd/projects/henstridge/4.otus/otu_table_filtered_json.biom')
 
-treefile = read_tree_greengenes("/Users/markread/Dropbox (Sydney Uni)/projects/micro_ecology_resources/referenceDBs/gg_13_8_otus/trees/97_otus.tree")
-refseqfile = ("/Users/markread/Dropbox (Sydney Uni)/projects/micro_ecology_resources/referenceDBs/gg_13_8_otus/rep_set/97_otus.fasta")
-samplefile = import_qiime_sample_data("/Users/markread/dropbox_usyd/projects/henstridge/mapping_file.txt")
+# treefile = read_tree_greengenes("/Users/markread/Dropbox (Sydney Uni)/projects/micro_ecology_resources/referenceDBs/gg_13_8_otus/trees/97_otus.tree")
+# refseqfile = ("/Users/markread/Dropbox (Sydney Uni)/projects/micro_ecology_resources/referenceDBs/gg_13_8_otus/rep_set/97_otus.fasta")
+# samplefile = import_qiime_sample_data("/Users/markread/dropbox_usyd/projects/henstridge/mapping_file.txt")
