@@ -1,0 +1,192 @@
+---
+title: "Confirming no significant clustering of pre-gavage microbial communities."
+author: "Mark N. Read"
+date: "17/04/2019"
+output: 
+  html_document:
+    number_sections: true
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+<!-- Scroll code through X axis, rather than spill onto new line-->
+<style>
+pre {
+  overflow-x: auto;
+}
+pre code {
+  word-wrap: normal;
+  white-space: pre;
+}
+</style>
+
+
+There are four experimental groups in this study:
+
+1. Normal chow-fed mice (NC) who were subjected to exercise (NC_Ex)
+2. Normal chow-fed mice (NC) who were sedentary (NC_Sed)
+3. High fat diet-fed mice (HF) who were subjected to exercise (HF_Ex)
+4. High fat diet-fed mice (HF) who were sedentary (HF_Sed)
+
+Stool samples from animals in each group were combined, suspended in saline, and then gavaged to recipients who were maintained on a standard chow diet. 
+
+Can recipient mice be distinguished from their own stool samples on the basis of the donor group?
+
+
+```{r setup, include=TRUE}
+rm(list=ls())  # Clean environment
+
+knitr::opts_chunk$set(echo = TRUE)
+options(width = 190)  # Width of the document produced, in characters. 
+
+library(mixOmics)
+library(stats)
+library(ggplot2)
+library(ggfortify)
+source('../microbial_ecology_tools/mixOmics_functions.r')  # Functions used across several analyses, hence extracted into this file. 
+source('../microbial_ecology_tools/microbial_ecology_functions.R') 
+source('../commons.R')
+```
+
+# Import data
+
+Data was reprocessed with DADA2. 
+Import it here, and ensure correct formatting. 
+
+```{r}
+setwd('~/dropbox_usyd/projects/henstridge/5.mixomics_pre_gavage//')
+# Ampicon sequence variants = asv. 
+asv_raw = read.csv(file='../4.dada2/seqtab-nochim.txt', header=TRUE, row.names=1,
+                   check.names=FALSE,  # Do not alter the names to be R variable-naming compliant. 
+                   sep='')  # Any contiguous sequence of whitespace character. 
+
+# Has a column for each taxonomic level. 
+asv_taxonomy = read.csv(file='../4.dada2/seqs_taxonomy.txt', header=TRUE, row.names=1, sep=',')
+# Collapse the seven taxonomic level columns into a single column. Preserves the row names. 
+asv_taxonomy = as.data.frame(apply(asv_taxonomy, 1, paste, collapse=" "))
+colnames(asv_taxonomy) = c('name')
+
+metadata = read.csv(file='../mapping_file.txt', header=TRUE, sep='\t', 
+                    row.names=1)  # Use sample names given as row index. 
+
+# Ensure samples are named consistently across the tables. 
+colnames(asv_raw)  # Sample names contain underscores
+rownames(metadata)  # Sample names contain periods. 
+# Convert periods to underscores. 
+rownames(metadata) = lapply(rownames(metadata), function(x) { gsub(pattern='\\.', replacement="_", x) } )
+metadata
+# Post-gavage metadata. 
+metadata_pre = metadata[metadata$SampleTime == 'pre' & metadata$Duplicate == 'No', ]
+dim(metadata_pre)
+
+```
+
+We typically filter out low-abundance taxa as they contribute noise but little signal. 
+A quantification of the proportion of total reads in the study that each ASV captures is presented in the accompanying document for the post-gavage samples. 
+Based on that analysis, a filter percentage of 0.07% was selected. 
+It is, likewise, applied here. 
+
+```{r}
+# Prepare the data for input to mixomics. 
+asv_relab = prepare_mixomics(asv_raw, filter_percent=0.07)
+dim(asv_relab)
+# Ensures that samples in the ASV table and the metadata table are in the same order. 
+asv_relab = asv_relab[rownames(metadata), ] 
+
+# Ensures that samples in the ASV table and the metadata table are in the same order. 
+pre_relab = asv_relab[rownames(metadata_pre), ]
+```
+
+# Investigate clustering of samples by donor group
+
+We are investigating here pre-gavage groups, so we anticipate no clustering of samples by Donor (because they haven't received their microbiota yet) - if we do find such a clustering, then this is indicative of some pre-intervention bias that should be investigated further. 
+
+We perform unsupervised principal component PCA analysis on the pre-gavage samples.
+
+Around 47% of the variance across the samples is captured in the first two dimensions, this is relatively high.  
+
+
+```{r post_pca}
+# Determine and extract principal components
+pre_pca = pca(pre_relab, ncomp = 10, logratio = 'ILR', scale=TRUE)
+plot(pre_pca)  # Plot of the eingenvalues (explained variance per component)
+```
+
+There is no clear clustering of samples by donor (cross section of diet and activity).
+The `NC_Sed` (normal show, sedentary) group does appear slightly clustered, but is not readily distinguishable from samples from other groups. 
+This is all consistent with expectations. 
+
+```{r}
+# We find a reasonable separation based on the donor's diet. 
+ordinate(pre_pca, group=factor(metadata_pre$Donor), plot_title='PCA: Pre-gavage', name_samples=TRUE)
+ordinate(pre_pca, group=factor(metadata_pre$Donor), plot_title='PCA: Pre-gavage', name_samples=TRUE, components=c(1, 3))
+```
+
+Create publication-quality plots. 
+```{r}
+ordinate(pre_pca, group=factor(metadata_pre$Donor), plot_title='PCA: Pre-gavage', name_samples=FALSE,
+         col_per_group_map = col_per_group,
+         spartan_plot = FALSE, filename = 'pca-Donor-pre_gavage-ANNOTATED.pdf')
+ordinate(pre_pca, group=factor(metadata_pre$Donor), plot_title='PCA: Pre-gavage', name_samples=FALSE,
+         col_per_group_map = col_per_group,
+         dimensions_mm=c(60, 45), fontsize=8, title_fontsize=8, point_size=1.5,
+         spartan_plot = TRUE, filename = 'pca-Donor-pre_gavage.pdf')
+
+```
+
+## No statistically significant clustering of samples by donor group. 
+
+A more sensitive analysis, that encompasses all of the dimensions (taxa) in the dataset, not soley the first few principle components, is performed here. 
+We calculate the distance between each sample. 
+The technique examines the distances between samples within each group, and contrasts this to the distances between two groups (all pairwise combinations of groups attempted). 
+Contrasting is through the Kolmogorov-Smirnov statistic, using a one-way alterantive hypothesis (we are testing if the between group distances are greater than the within group distances - this would suggest a clustering). 
+We use the Aitchison distance metric, which is the Euclidean distance between samples in CLR transformed space; this is robust to the compositional nature of the data. 
+Our expectation is for no statiatically significant difference. 
+Indeed, that is what we find. 
+The reported p-values have been adjusted for multiple hypothesis testing through the Bonferroni method. 
+
+```{r}
+source('../microbial_ecology_tools/microbial_ecology_functions.R') 
+fecal_asv_dist = aitchison_distance(pre_relab)  # Returns n x n matrix (for n samples). It is symmetrical along the diagonal. 
+diffs = within_between_group_distances(distance_matrix=fecal_asv_dist, plotsave_prefix='group_distances_Donor/', 
+                                       group_vector=metadata_pre$Donor,
+                                       separate_within_distributions = FALSE,
+                                       titles=TRUE
+                                       )
+write.csv(diffs$group_differences_ks, 'group_distances_Donor/Donor_group_differences_KS_scores.csv')
+write.csv(diffs$group_differences_p, 'group_distances_Donor/Donor_group_differences_pValue_scores.csv')
+diffs$group_differences_p  # Would not expect any significant p values here. 
+```
+
+# Clustering by cage of origin
+
+We do observe some clustering of pre-gavage (recipient) faecal samples. 
+Are these reflective of cages in which samples were housed?
+Based on analyses below, it would appear not. 
+
+
+```{r}
+ordinate(pre_pca, group=factor(metadata_pre$OriginCage), plot_title='PCA: Pre-gavage, cage', name_samples=FALSE,
+         # col_per_group_map = col_per_group,
+         spartan_plot = FALSE, filename = 'pca-OriginCage-pre_gavage-ANNOTATED.pdf')
+ordinate(pre_pca, group=factor(metadata_pre$OriginCage), plot_title='PCA: Pre-gavage, cage', name_samples=FALSE,
+         col_per_group_map = col_per_group,
+         dimensions_mm=c(60, 45), fontsize=8, title_fontsize=8, point_size=1.5,
+         spartan_plot = TRUE, filename = 'pca-OriginCage-pre_gavage.pdf')
+```
+
+
+```{r}
+source('../microbial_ecology_tools/microbial_ecology_functions.R') 
+fecal_asv_dist = aitchison_distance(pre_relab)  # Returns n x n matrix (for n samples). It is symmetrical along the diagonal. 
+diffs = within_between_group_distances(distance_matrix=fecal_asv_dist, plotsave_prefix='group_distances_OriginCage/', 
+                                       group_vector=metadata_pre$OriginCage,
+                                       separate_within_distributions = FALSE,
+                                       titles=TRUE
+                                       )
+write.csv(diffs$group_differences_ks, 'group_distances_OriginCage/Cage_group_differences_KS_scores.csv')
+write.csv(diffs$group_differences_p, 'group_distances_OriginCage/Cage_group_differences_pValue_scores.csv')
+diffs$group_differences_p  # Would not expect any significant p values here. 
+```

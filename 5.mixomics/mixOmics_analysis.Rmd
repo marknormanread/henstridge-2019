@@ -1,0 +1,854 @@
+---
+title: "Supervised Separation"
+author: "Mark N. Read"
+date: "01/04/2019"
+output: 
+  html_document:
+    number_sections: true
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+<!-- Scroll code through X axis, rather than spill onto new line-->
+<style>
+pre {
+  overflow-x: auto;
+}
+pre code {
+  word-wrap: normal;
+  white-space: pre;
+}
+</style>
+
+
+There are four experimental groups in this study:
+
+1. Normal chow-fed mice (NC) who were subjected to exercise (NC_Ex)
+2. Normal chow-fed mice (NC) who were sedentary (NC_Sed)
+3. High fat diet-fed mice (HF) who were subjected to exercise (HF_Ex)
+4. High fat diet-fed mice (HF) who were sedentary (HF_Sed)
+
+Stool samples from animals in each group were combined, suspended in saline, and then gavaged to recipients who were maintained on a standard show diet. 
+
+Can recipient mice be distinguished from their own stool (or was it cecal?) samples on the basis of the donor group?
+
+
+```{r setup, include=TRUE}
+rm(list=ls())  # Clean environment
+
+knitr::opts_chunk$set(echo = TRUE)
+options(width = 190)  # Width of the document produced, in characters. 
+
+library(mixOmics)
+library(stats)
+library(scales)
+library(ggplot2)
+library(ggfortify)
+source('../commons.R')
+source('../microbial_ecology_tools/mixOmics_functions.r')  # Functions used across several analyses, hence extracted into this file. 
+source('../microbial_ecology_tools/microbial_ecology_functions.R') 
+```
+
+# Import data
+
+Data was reprocessed with DADA2. 
+Import it here, and ensure correct formatting. 
+
+```{r}
+setwd('~/dropbox_usyd/projects/henstridge/5.mixomics/')
+# Ampicon sequence variants = asv. 
+asv_raw = read.csv(file='../4.dada2/seqtab-nochim.txt', header=TRUE, row.names=1,
+                   check.names=FALSE,  # Do not alter the names to be R variable-naming compliant. 
+                   sep="")  # Any contiguous sequence of whitespace character. 
+
+# Has a column for each taxonomic level. 
+asv_taxonomy = read.csv(file='../4.dada2/seqs_taxonomy.txt', header=TRUE, row.names=1, sep=',')
+# Collapse the seven taxonomic level columns into a single column. Preserves the row names. 
+asv_taxonomy = as.data.frame(apply(asv_taxonomy, 1, paste, collapse=" "))
+colnames(asv_taxonomy) = c('name')
+
+metadata = read.csv(file='../mapping_file.txt', header=TRUE, sep='\t', 
+                    row.names=1)  # Use sample names given as row index. 
+
+# Ensure samples are named consistently across the tables. 
+colnames(asv_raw)  # Sample names contain underscores
+rownames(metadata)  # Sample names contain periods. 
+# Convert periods to underscores. 
+rownames(metadata) = lapply(rownames(metadata), function(x) { gsub(pattern='\\.', replacement="_", x) })
+metadata
+# Post-gavage metadata. 
+metadata_post = metadata[metadata$SampleTime == 'post' & metadata$Duplicate == 'No', ]
+dim(metadata_post)
+```
+
+We typically filter out low-abundance taxa as they contribute noise but little signal. 
+Here is a quantification of what portion of all the reads in the study each taxa represents, when ranked. 
+
+
+
+```{r}
+source('../microbial_ecology_tools/mixOmics_functions.r')  # Functions used across several analyses, hence extracted into this file. 
+asv_raw_post = asv_raw[, rownames(metadata_post)]
+plot_feature_abundances(t(asv_raw_post),  # Supply features as columns. 
+                        xlab='Amplicon sequence variants')
+#### Publication quality plots. 
+p = plot_feature_abundances(t(asv_raw_post),  # Supply features as columns. 
+                            xlab='Amplicon sequence variants (ranked)',
+                            plot_ggplot = TRUE,
+                            filter_n_abundant = 300)
+p + geom_point(size=1, shape=21, fill=NA) +  # Open circles with no fill. 
+    scale_y_continuous(trans = log_trans(), breaks=c(25, 5, 1, 0.1, 0.001), labels = prettyNum) +  # Log scale
+    theme(text = element_text(size=8),
+          axis.ticks = element_blank(),  # Turn off black tick marks.
+          axis.title.x = element_text(size=8),
+          axis.title.y = element_text(size=8))
+ggsave('post_asv_relative_abundance.pdf', width=60, height=50, units='mm')
+  
+```
+
+The stringency of the filtering can have quite an effect on downstream analyses, so we investigate this here. 
+Here are some attempts.
+The `Donor` classification problem (below) was run in each case to gauge classification error. 
+It's reasonably stable, which is encouraging. 
+
+Filter % | Best BER on Donor | # Taxa retained | Notes
+---------|-------------------|------------------------
+0.01     | 0.25              | 218             | >=15 sPLS-DA dimensions, which is excessively high
+0.02     | 0.31              | 166             |
+0.03     | 0.24              | 139             |
+0.04     | 0.20              | 131             | 
+0.05     | 0.18              | 114             |
+0.06     | 0.25              | 102             |
+0.07     | 0.20              | 95              |
+0.08     | 0.21              | 89              |
+0.09     | 0.21              | 89              |
+0.10     | 0.23              | 83              |
+0.50     | 0.19              | 31              |
+1.00     | 0.17              | 19              | # Taxa selected very low. 
+
+We've tried out a decent range of values. 
+It is very unusual to filter to the point of retaining only 19 taxa. 
+We get decent performance with 0.07, so will run with that. 
+
+```{r}
+# Prepare the data for input to mixomics. 
+asv_relab = prepare_mixomics(asv_raw, filter_percent=0.07)
+dim(asv_relab)
+# Ensures that samples in the ASV table and the metadata table are in the same order. 
+asv_relab = asv_relab[rownames(metadata), ] 
+
+# Ensures that samples in the ASV table and the metadata table are in the same order. 
+post_relab = asv_relab[rownames(metadata_post), ]
+```
+
+# Unsupervised PCA exploration of the data. 
+
+## Check technical replicates
+
+Some mice had replicate fecal samples (not the same stool) independently prepared and sequenced. 
+The hope is that these replicates are similar to one another. 
+We gauge this using a PCA, highlighting the technical replicates specifically. 
+
+Around 50% of total variance is captured in just the first two principal components. 
+
+```{r}
+# Determine and extract principal components
+all_pca = pca(asv_relab, ncomp = 10, logratio = 'ILR', scale=TRUE)
+plot(all_pca)  # Plot of the eingenvalues (explained variance per component
+```
+
+We plot the first two principal components.
+Most duplicates (from the same mouse) do lie close to one another, however several show considerable differences: 100_post, 100_pre, 90_pre, 72_post, 85_post.
+That's 5 out of 12. 
+This likely stems from them being different fecal samples, but nonetheless 5/12 is higher than we could have hoped. 
+
+```{r}
+group=factor(metadata$DuplicatedSample)
+col_per_group_names = rainbow(n=length(levels(group)))
+col_per_group_names[length(col_per_group_names)] = "#DDDDDD"  # Set all non-duplicates to a very light grey.
+
+plotIndiv(all_pca, 
+          comp = c(1,2), # Select which components to plot on each axis. 
+          # This needs to be absent from the call to plot sample names. 
+          # pch = 16,  # Plot character to use
+          ind.names = TRUE,  # Do not name each item on the plot
+          group = group, 
+          col.per.group = col_per_group_names,
+          legend = TRUE,
+          title = 'PCA: Duplicates')
+dev.print(pdf, "PCA_duplicates.pdf")
+```
+
+## Explore post-gavage samples
+
+We perform unsupervised principal component PCA analysis on the post-gavage samples - these we hope will separate by donor group. 
+In what follows, we explore the first three principal components (1 vs 2, and 1 vs 3) for each categorisation examined.
+
+An isometric logratio (ILR) transform is applied to bring the compositional data out of the simplex.
+As explanation, microbiome sequencing data are compositional - each sample must add up to 100%. 
+This can cause downstream analytical problems and artefacts: one taxa going up in relative abundance necessitates that at least one other go down. 
+The isometric logratio transform is an excellent way of dealing with that - it defines new axes that lie **on** the simplex, rather than cutting through them, and expresses each sample as a location in those new axes. 
+We must use the centred logratio transform for the supervised mixOmics techniques used later in the document as ILR is not supported for them. 
+
+Around 42% of the variance across the samples is captured in the first two dimensions, this is relatively high.  
+
+
+```{r post_pca}
+# Determine and extract principal components
+post_pca = pca(post_relab, ncomp = 10, logratio = 'ILR', scale=TRUE)
+plot(post_pca)  # Plot of the eingenvalues (explained variance per component)
+```
+
+Samples do separate reasonably well by donors that were fed either high-fat of normal chow diets.
+```{r}
+# We find a reasonable separation based on the donor's diet. 
+ordinate(post_pca, group=factor(metadata_post$DonorDiet), plot_title='Post-gavage PCA: Donor diet', name_samples=TRUE)
+ordinate(post_pca, group=factor(metadata_post$DonorDiet), plot_title='Post-gavage PCA: Donor diet', name_samples=TRUE, components=c(1, 3))
+
+```
+
+There is no clear separation based on the exercise state of the donor however. 
+```{r}
+# Post-gavage recipients do not separate well based on donor's physical activity.
+ordinate(post_pca, group=factor(metadata_post$DonorActivity), plot_title='Post-gavage PCA: Donor activity', name_samples=TRUE)
+ordinate(post_pca, group=factor(metadata_post$DonorActivity), plot_title='Post-gavage PCA: Donor activity', name_samples=TRUE, components=c(1,3))
+```
+
+Colouring samples by donor group (four groups, the combinations of diet and exercise state), we find a minor clustering, but it is mainly driven by diet.
+```{r}
+# For completeness, the combination of donor diet and activity. 
+# There is some clustering of the groups, but not very much. 
+ordinate(post_pca, group=factor(metadata_post$Donor), plot_title='Post-gavage PCA: Donor', name_samples=TRUE)
+ordinate(post_pca, group=factor(metadata_post$Donor), plot_title='Post-gavage PCA: Donor', name_samples=TRUE, components=c(1,3))
+```
+
+
+The second principal coordinate shows a large separation between sample `81_post` and the rest - has something odd happened to this sample?
+
+```{r}
+#### Publication quality plot
+ordinate(post_pca, group=factor(metadata_post$Donor), plot_title='Post-gavage PCA: Donor', name_samples=FALSE,
+         col_per_group_map = col_per_group,
+         filename='pca_Donor_post_gavage-ANNOTATED.pdf')
+
+ordinate(post_pca, group=factor(metadata_post$Donor), plot_title='PCA: Post-gavage, Donor', name_samples=FALSE,
+         col_per_group_map = col_per_group,
+         dimensions_mm=c(60, 45), fontsize=8, title_fontsize=8, point_size=1.5, spartan_plot = TRUE, 
+         filename='pca_Donor_post_gavage.pdf')
+
+```
+
+
+## How separable are post-gavage groups of samples (pairwise comparisons)?
+
+Here we perform pair-wise comparisons between experimental groups, explicitly testing how different the within-group distances are compared to the between-group distances. 
+We are seeking whether mice within each experimental group were more similar to one another than with mice from the other group. 
+By doing this pairwise (rather than all groups together as is conducted below in supervised techniques) we gain an feeling for which groups are easily distinguishable. 
+
+Conventional distance metrics (Bray Curtis, UniFrac, etc) have been criticised for introducing artefacts under compisitional data, as microbiome sequencing data is. 
+[Gloor et al advocate](https://www.frontiersin.org/articles/10.3389/fmicb.2017.02224/full) the 'Aitchison' distance metric instead.
+This is Euclidean distance in centred logratio transformed data.
+
+```{r}
+post_clr = mixOmics::logratio.transfo(post_relab,  # Samples as rows, Taxa/Features as columns. 
+                                      logratio='CLR', offset=0)
+
+post_clr_dist_raw = dist(post_clr, method='euclidean', diag=FALSE)  # Returns some weird 'dist' class ...
+post_clr_dist = as.matrix(post_clr_dist_raw)  # ... turn it into something better behaved. 
+
+diffs = within_between_group_distances(distance_matrix = post_clr_dist, group_vector = metadata_post$Donor,
+                                       separate_within_distributions = FALSE,
+                                       titles=FALSE,
+                                       xlimits=c(5, 47), plot_size=c(30, 20))
+diffs$group_differences_p
+
+write.csv(diffs$group_differences_ks, 'group_differences_KS_scores.csv')
+write.csv(diffs$group_differences_p, 'group_differences_pValue_scores.csv')
+```
+
+```{r}
+# Check consistency of above method with more conventional techniques. Confirmed. 
+# 
+# library(vegan)
+# library(phyloseq)
+# 
+# adonis(distance(post_relab, method="bray") ~ Donor, data=metadata_post)
+# 
+# # Pairwise adonis
+# co = combn(unique(metadata_post$Donor), 2)
+# pairs = c()
+# F.Model =c()
+# R2 = c()
+# p.value = c()
+# 
+# elem = 1
+# for (elem in 1:ncol(co)) {
+#   print(elem)
+#   co.1 <- rownames(subset(metadata_post, Donor==co[1,elem]))
+#   co.2 <- rownames(subset(metadata_post, Donor==co[2,elem]))
+#   
+#   co.co <- c(co.1,co.2)
+#   
+#   ad = adonis(post_clr_dist[co.co, co.co] ~ Donor, data=metadata_post[co.co, ])
+#   
+#   pairs = c(pairs, paste(co[1,elem],'vs',co[2,elem]))
+#   F.Model = c(F.Model, ad$aov.tab[1,4])
+#   R2 = c(R2, ad$aov.tab[1,5])
+#   p.value = c(p.value, ad$aov.tab[1,6])
+# }
+# 
+# p.adjusted = p.adjust(p.value, method='bonferroni')
+# sig = c(rep('',length(p.adjusted)))
+# sig[p.adjusted <= 0.05] <-'.'
+# sig[p.adjusted <= 0.01] <-'*'
+# sig[p.adjusted <= 0.001] <-'**'
+# sig[p.adjusted <= 0.0001] <-'***'
+# 
+# pairw.res = data.frame(pairs, F.Model, R2, p.value, p.adjusted, sig)
+# print(pairw.res)
+```
+
+# Supervised analysis: distinguish donor group
+
+## Motivation and Methodology
+
+The above analysis poses the question, To what extent is the separation between samples explainable by the donor group?
+Here we pose a slightly different question, Can samples be separated on the basis of donor group. 
+In the former, we are blind to groups, plotting each sample based on it's relationship to one another. 
+In the latter, we explicitly seek taxa along which the groups separate - this will not correspond to the greatest variance between samples (or we'd have seen it in the PCA). 
+The present technique, sparse partial least squares discriminant analysis, is akin to PCA, only it selects components that best distinguish groups rather than the overall variance in the data. 
+The 'sparse' bit involves using a regularized regression (L1, or LASSO) to select only a subset of available taxa in informing each component of the model. 
+This helps diminish the negative impact of noise (fewer taxa are used, and those that are used must carry considerable predictive value). 
+It also helps solve the common biological problem of having more features (taxa) in the dataset than samples (or examples, mice in this case) - this is a fundamental problem for machine learning and often leads to overfitting (discussed below) - there is a high chance that some noisy feature will *happen* to be good at separating the groups through random chance allow. 
+Had we more samples, which we don't, these effects would be diminished. 
+
+This is a machine learning approach. 
+Done properly, one must protect against overfitting, wherein models are built that seemingly separate the samples well, but on the basis of noise rather than genuine signal. 
+To protect against this we employ a leave-one-out methodology wherein the data are repeatedly partitioned into 'training' and 'validation' sets. 
+Single samples are withheld for the validation portion at a time, with all remaining samples forming a training set. 
+Hence, each sample is used for testing exactly once. 
+We repeatedly build a model on the training dataset, and evaluate the overall performance through the percentage of times that the test sample was mis-classified when evaluated through the model. 
+This allows us to gauge overfitting (and adjust accordingly) because noise is random - if any relationship is found between a given taxa and the groups, we would expect the noise to be different for the test sample, and hence classification accuracy will diminish. 
+We explore a variety of different model formulations, including different numbers of taxa in the analysis, the size of the subsets of taxa that then inform each component of the model, and the number of components in the model. 
+
+Note that it is still possible to overfit.
+We are attempting and evaluating a variety of different model formulations (the parameters described in the previous paragraph), and it is possible that we just *happen* to find some parameters for which both the trained models and the test samples align.
+The overfitting is not so much at the level of an individual model, but in how we have picked the parameters that inform that model. 
+Ideally, some samples would have been retained that are used **once only** in evaluating the final tuned model. 
+In absence of such samples, an alternative approach is to randomize the group assignments and try building predictive models for them. 
+Ideally we would perform no better than random - if we have four groups, then the mis-classification rate should be 75%. 
+As we will see below, our mis-classification rate will actually be lower than this, because of overfitting. 
+However, if the classification accuracy of the un-randomized data is consistently better than for the randomized data, then we can safely assume that there is real signal (predictive potential) here for separating groups based on their gut microbiome. 
+
+
+## Distinguish samples based on donor group.
+
+Here we use the above sPLS-DA approach to distinguish samples by their donor group, based on microbiome analysis. 
+We use all four groups (HR and NC vs Sed and Ex).
+
+There are two parameters that we attempt to tune here:
+
+1. The number of components informing the model. It is on the basis of these that the samples will attempt to be separated. 
+2. The number of taxa that inform each component. This is a (sometimes very small) subset of all taxa available. See explanation above, this is good for cases where there are many more taxa than samples. 
+
+Here we use the leave one out cross validation methodology to repeatedly build models using a given set of parameters, and evaluate performance. 
+Thereafter we will select the best parameter values and build one final model (which we can also evaluate through leave one out cross validation - we would hope to get similar results to what is found to be optimal here, and hence it is a good sanity check).
+We use the balanced error rate (BER) because our groups differ in the samples they capture. 
+
+```{r }
+# Tune the sPLS-DA. This entails leave one out validation to determine the optimal number of features (keepX) to retain
+# in each latent variable of the PLSDA.
+# Tuning is performed one component at a time.
+group = factor(metadata_post$Donor)
+tune_splsda = tune.splsda(X=post_relab, Y=group, ncomp=15,
+                          logratio='CLR',
+                          # Investigate number of taxa to retain. Sequence form 5..150.
+                          test.keepX=c(1, 2, 3, 4, seq(5, 50, 5)),
+                          validation='loo',
+                          dist=c('mahalanobis.dist'),
+                          measure='BER',  # 'BER' (balanced error rate for uneven class sizes) or 'overall'
+                          scale=TRUE,
+                          near.zero.var=TRUE,  # Recommended for microbiome data.
+                          progressBar=FALSE,
+                          cpus=8  # Run in parallel. Adjust if you don't have this many CPUs. Set to 1 if unsure.
+                          )
+# mixOmics documentation not clear on how to interpert this.
+# I believe that the error rate (y axis) is of ALL the prior components, using the optimal keepX for each (they are
+# iteratively tuned).
+# "The classification error rates for each component conditional on the last component are represented below, for all components specified in the tune function." - http://mixomics.org/case-studies/splsda-srbct/
+plot(tune_splsda)
+# Same data as in graph. One component tuned (and then added) at a time. Shows the error rate as keepX is varied.
+# print(tune_splsda$error.rate)
+# Minimum error rate found when adding each component (number of taxa informing each subsequent component is varied).
+colMins(tune_splsda$error.rate)
+# Same as above, but incorporates only the best keepX for each component.
+print(tune_splsda$error.rate.class)
+
+select_ncomp = which.min(colMins(tune_splsda$error.rate))
+cat('Based on optimal performance, selecting', select_ncomp, 'principal component(s) in building the sPLS-DA.\n')
+select_keepX = tune_splsda$choice.keepX[1:select_ncomp]
+select_keepX  # How many taxa inform each component of the model.
+```
+
+Build a final model based on tuned performance. 
+It appears, based on the first two components at least, that exercise state (sedentary or exercised) of the donor is more distinguishable in recipients of normal chow-fed donors than HF-fed donors. 
+Bear in mind that this model had some 6 components, which is quite a lot - groups may be more separable in subsequent components. 
+An error rate of around 20% is pretty reasonable. 
+
+```{r}
+group = factor(metadata_post$Donor)
+post_donor_splsda = splsda(X=post_relab, Y=group,
+                             ncomp=select_ncomp, keepX=select_keepX,  # From tuning, above.
+                             logratio='CLR', scale=TRUE,  # Microbiome data is compositional.
+                             near.zero.var=TRUE)  # Set to true because microbiome data contains many zeros.
+# Access the principle components through: post_donor_splsda$variates$X
+
+# Performs a leave one out-based evaluation of the model built.
+# (Does not vary components or keepX, as done above using tune.splsda)
+post_donor_splsda_perf = perf(post_donor_splsda, validation="loo", progressBar=FALSE, auc=TRUE)
+# Tried building a splsda with ncomp=4, and confirm that accuracy suffers with the additional fourth component.
+plot(post_donor_splsda_perf)
+post_donor_splsda_perf$error.rate.class
+post_donor_splsda_perf$error.rate  # Balanced error rate reported in paper.
+
+ordinate(projection=post_donor_splsda, group=group, plot_title='sPLS-DA: Post-gavage, Donor', name_samples=TRUE, ellipse=TRUE,
+         background=TRUE)
+ordinate(projection=post_donor_splsda, group=group, plot_title='sPLS-DA: Post-gavage, Donor', name_samples=TRUE, ellipse=TRUE,
+         components=c(1,3))
+#### Publication quality plot
+ordinate(projection=post_donor_splsda, group=group, plot_title='sPLS-DA: Post-gavage, Donor', name_samples=FALSE, ellipse=FALSE,
+         background=TRUE,
+         col_per_group_map = col_per_group,
+         filename = 'splsda_Donor_post_gavage-ANNOTATED.pdf')
+
+ordinate(projection=post_donor_splsda, group=group, plot_title='sPLS-DA: Post-gavage, Donor', name_samples=FALSE, ellipse=FALSE,
+         background=TRUE,
+         col_per_group_map = col_per_group,
+         dimensions_mm=c(60, 45), fontsize=8, title_fontsize=8, point_size=1.5, spartan_plot = TRUE,
+         filename = 'splsda_Donor_post_gavage.pdf')
+
+```
+
+Determine which taxa are driving the model, and save them to the file system. 
+Each dimension makes use of a subset of available taxa, and the 'loadings' refer to how influential they are. 
+Usually people simply look at the loadings of the final built model. 
+However, it is entirely possible that the model is overfitting to some degree (in fact, we can almost guarantee this, to some degree). 
+More powerful is to look at how frequently a given taxa was selected by the models built under leave one out cross validation **in addition** to it's loading in the final model. 
+A high loading taxa that isn't frequently selected under leave one out cross validation should be ignored - it is generated by noise, not signal. 
+That is handled here, with results saved to a CSV.
+
+```{r}
+out_dir = 'donor_group'
+dir.create(out_dir, showWarnings=FALSE)
+
+extract_important_features_all_components(
+  model=post_donor_splsda,  # an splsda model
+  model_perf=post_donor_splsda_perf,  # Same `model``, but run through the `perf` function.
+  max_components=select_ncomp,  # How many components to explore.
+  csv_file_prefix=paste(out_dir, '/donor_group_taxa_', sep=''),  # Specify directory and prefix (to identify model and groups explored) for csv files.
+  plot_loadings = FALSE,
+  feature_map=asv_taxonomy)
+```
+
+
+## Quantify overfitting potential
+
+See above for notes detailing motivation. 
+We assign the samples random groups and try to tune and build the model again repeatedly.
+We extract the lowest error rates obtained in each repetition, and ultimately plot these. 
+
+There are four groups (as in the `Donor` categorization), so a random baseline would yield an error rate of 75%. 
+An error rate higher than that is weird, it's worse than random, and we don't tend to see that. 
+An error rate lower than random is indicative of overfitting. 
+The hope is that the error rate we achieve on our non-randomized data is lower than the randomized data - it means there is real signal to be detected. 
+
+The lowest error rate we find here is about 45%, the median is 55%. 
+
+
+```{r}
+set.seed(123)  # Ensure reproducibility
+repetitions = 50
+lowest_errors = rep(1, repetitions)
+shown_plot = FALSE  # Show an ordination plot of the random reassignments only once. 
+for (repetition in 1:repetitions)
+{
+  print(paste('repetition', repetition, sep=' '))
+  # Create a vector of four categories, and then shuffle them. 
+  categories = c(rep('A', sum(metadata_post$Donor == 'NC_Sed')),  
+                 rep('B', sum(metadata_post$Donor == 'NC_Ex')), 
+                 rep('C', sum(metadata_post$Donor == 'HF_Sed')), 
+                 rep('D', sum(metadata_post$Donor == 'HF_Ex')))
+  randomised_categories = factor(sample(categories))
+  # Tune the sPLS-DA. Same methodology as has been used above. 
+  tune_splsda = tune.splsda(X=post_relab, Y=randomised_categories, ncomp=15, 
+                            logratio='CLR', scale=TRUE, near.zero.var=TRUE,
+                            test.keepX=c(1, 2, 3, 4, seq(5, 50, 5)),  
+                            validation='loo',
+                            dist='mahalanobis.dist',  
+                            measure='BER',  
+                            progressBar=FALSE,
+                            cpus=8  # Run in parallel. Adjust if you don't have this many CPUs. Set to 1 if unsure. 
+                            )
+  
+  lowest_errors[repetition] = min(tune_splsda$error.rate)
+  
+  select_ncomp = which.min(colMins(tune_splsda$error.rate))
+  
+  # Show the plot once, as illustration. 
+  if (select_ncomp >= 2 && shown_plot == FALSE)
+  {
+    shown_plot = TRUE  # Do this once only as illustration of what overfitting can look like. 
+    select_keepX = tune_splsda$choice.keepX[1:select_ncomp]  # Number of features informing each component. 
+    final_splsda = splsda(post_relab, Y=randomised_categories, ncomp=select_ncomp, 
+                        logratio='CLR', keepX=select_keepX)
+    
+    plotIndiv(final_splsda, comp = c(1, 2),
+              ind.names = TRUE,
+              ellipse = TRUE, legend = TRUE,
+              title = 'sPLSDA comps 1 & 2; RANDOMISED')
+    plot(tune_splsda)
+  }
+}
+
+#### Make graph for publication
+highest_accuracies = 1 - lowest_errors  # Paper is written in terms of accuracy, not error. 
+df = data.frame(accuracies = highest_accuracies)
+ggplot(df, aes(accuracies)) + stat_ecdf(geom = "step") + 
+  ggtitle('Donors') +
+  xlab('Highest accuracies following tuning (%)') + 
+  ylab('Cumulative distribution') +
+  xlim(c(0, 1)) + ylim(c(0, 1)) +
+  theme(text = element_text(size=8))
+ggsave('splsda_Donor_random_bootstrapping_accuracies.pdf', width=6, height=5, units='cm')
+
+# Plot the lowest errors attained as a cumulative distribution plot. 
+plot(ecdf(lowest_errors * 100), verticals=TRUE, ylab='Cumulative distribution', 
+     xlab='Lowest misclassified sample rates following tuning (%)', 
+     main='Random sample group assignments')
+```
+
+The error rates on our non-randomized data are all lower than the best error rates obtained under these randomized data, leading us to conclude that there is genuine signal to be found here. 
+
+# Supervised analysis: Distinguish samples based on donor diet.
+
+This investigation, and the next, are to gauge how well separable recipient microbiomes are based on donor diet or exercise status. 
+The aim is to get a feel for which of these two factors are the most influential.
+We expect diet to be, based on the above PCA plots. 
+
+As above, we optimize sPLS-DA model parameters using leave one out cross validation, attempting to distinguish recipient microbiomes based on on donor diets. 
+
+```{r }
+# Tune the sPLS-DA. This entails leave one out validation to determine the optimal number of features (keepX) to retain 
+# in each latent variable of the PLSDA. 
+# Tuning is performed one component at a time.
+group = factor(metadata_post$DonorDiet)
+tune_splsda = tune.splsda(X=post_relab, Y=group, ncomp=15, 
+                          logratio='CLR', 
+                          # Investigate number of taxa to retain. Sequence form 5..150.
+                          test.keepX=c(1, 2, 3, 4, seq(5, 50, 5)),  
+                          validation='loo',
+                          dist=c('mahalanobis.dist'),  
+                          measure='BER',  # 'BER' (balanced error rate for uneven class sizes) or 'overall'
+                          scale=TRUE,
+                          near.zero.var=TRUE,  # Recommended for microbiome data. 
+                          progressBar=FALSE,
+                          cpus=8  # Run in parallel. Adjust if you don't have this many CPUs. Set to 1 if unsure. 
+                          )
+# mixOmics documentation not clear on how to interpert this. 
+# I believe that the error rate (y axis) is of ALL the prior components, using the optimal keepX for each (they are
+# iteratively tuned). 
+# "The classification error rates for each component conditional on the last component are represented below, for all components specified in the tune function." - http://mixomics.org/case-studies/splsda-srbct/
+plot(tune_splsda)
+# Same data as in graph. One component tuned (and then added) at a time. Shows the error rate as keepX is varied. 
+print(tune_splsda$error.rate)
+# Minimum error rate found when adding each component (number of taxa informing each subsequent component is varied).
+colMins(tune_splsda$error.rate)  
+# Same as above, but incorporates only the best keepX for each component.
+print(tune_splsda$error.rate.class) 
+
+select_ncomp = which.min(colMins(tune_splsda$error.rate))
+cat('Based on optimal performance, selecting', select_ncomp, 'principal component(s) in building the sPLS-DA.\n')
+select_keepX = tune_splsda$choice.keepX[1:select_ncomp]
+select_keepX  # How many taxa inform each component of the model. 
+```
+
+The lowest error rate is 9%, which is very good, and it is obtained on a two components informed by at most taxa, which is also encouraging. 
+It suggests a model that is not overly complex. 
+
+```{r}
+group = factor(metadata_post$DonorDiet)
+post_donor_splsda = splsda(X=post_relab, Y=group, 
+                             ncomp=select_ncomp, keepX=select_keepX,  # From tuning, above. 
+                             logratio='CLR', scale=TRUE,  # Microbiome data is compositional. 
+                             near.zero.var=TRUE)  # Set to true because microbiome data contains many zeros. 
+# Access the principle components through: post_donor_splsda$variates$X
+
+# Performs a leave one out-based evaluation of the model built. 
+# (Does not vary components or keepX, as done above using tune.splsda)
+post_donor_splsda_perf = perf(post_donor_splsda, validation="loo", progressBar=FALSE, auc=TRUE)
+# Tried building a splsda with ncomp=4, and confirm that accuracy suffers with the additional fourth component. 
+plot(post_donor_splsda_perf) 
+post_donor_splsda_perf$error.rate
+post_donor_splsda_perf$error.rate.class
+
+ordinate(projection=post_donor_splsda, group=group, plot_title='Post-gavage: Donor diet', name_samples=TRUE, ellipse=TRUE)
+#### Publication quality plot
+ordinate(projection=post_donor_splsda, group=group, plot_title='sPLS-DA: Post-gavage, Donor Diets', name_samples=FALSE, 
+         ellipse=FALSE,
+         background=TRUE,
+         col_per_group_map = col_per_group,
+         filename = 'splsda_DonorDiet_post_gavage-ANNOTATED.pdf')
+
+ordinate(projection=post_donor_splsda, group=group, plot_title='sPLS-DA: Post-gavage, Donor Diets', name_samples=FALSE, ellipse=FALSE,
+         background=TRUE,
+         dimensions_mm=c(60, 45), fontsize=8, title_fontsize=8, point_size=1.5, spartan_plot = TRUE, 
+         col_per_group_map = col_per_group,
+         filename = 'splsda_DonorDiet_post_gavage.pdf')
+
+### Save loadings and stability of taxa informing each component. 
+# For more info, see comments above for "donor group" model building.
+out_dir = 'donor_diet'
+dir.create(out_dir, showWarnings=FALSE)
+
+extract_important_features_all_components(
+  model=post_donor_splsda,  # an splsda model
+  model_perf=post_donor_splsda_perf,  # Same `model``, but run through the `perf` function.
+  max_components=select_ncomp,  # How many components to explore. 
+  csv_file_prefix=paste(out_dir, '/donor_diet_taxa_', sep=''),  # Specify directory and prefix (to identify model and groups explored) for csv files. 
+  plot_loadings = FALSE,
+  feature_map=asv_taxonomy)
+```
+
+## Quantify overfitting potential
+
+We again gauge the baseline of random assignment, adjusted for the capacity to overfit. 
+The lowest error rate is around 20%, and the median is 35%. 
+The best value is thus double what was achieved with our non-randomized data, and we conclude that there is real signal in the microbiome profiling of recipients indicating the diet of their donors. 
+
+```{r}
+set.seed(1)  # Ensure reproducibility
+repetitions = 50
+lowest_errors = rep(1, repetitions)
+shown_plot = FALSE
+for (repetition in 1:repetitions)
+{
+  # Create a vector of four categories, and then shuffle them. 
+  categories = c(rep('A', sum(metadata_post$DonorDiet == 'HF')),  
+                 rep('B', sum(metadata_post$DonorDiet == 'NC'))
+                 )
+  randomised_categories = factor(sample(categories))
+  # Tune the sPLS-DA. Same methodology as has been used above. 
+  tune_splsda = tune.splsda(X=post_relab, Y=randomised_categories, ncomp=15, 
+                            logratio='CLR', scale=TRUE, near.zero.var=TRUE,
+                            test.keepX=c(1, 2, 3, 4, seq(5, 50, 5)),  
+                            validation='loo',
+                            dist='mahalanobis.dist',  
+                            measure='BER',  
+                            progressBar=FALSE,
+                            cpus=8  # Run in parallel. Adjust if you don't have this many CPUs. Set to 1 if unsure. 
+                            )
+  
+  lowest_errors[repetition] = min(tune_splsda$error.rate)
+  
+  select_ncomp = which.min(colMins(tune_splsda$error.rate))
+  
+  # Show the plot once, as illustration. 
+  if (select_ncomp >= 2 && shown_plot == FALSE)
+  {
+    shown_plot = TRUE  # Do this once only as illustration of what overfitting can look like. 
+    select_keepX = tune_splsda$choice.keepX[1:select_ncomp]  # Number of features informing each component. 
+    final_splsda = splsda(post_relab, Y=randomised_categories, ncomp=select_ncomp, 
+                        logratio='CLR', keepX=select_keepX)
+    
+    plotIndiv(final_splsda, comp = c(1, 2),
+              ind.names = TRUE,
+              ellipse = TRUE, legend = TRUE,
+              title = 'sPLSDA comps 1 & 2; RANDOMISED')
+    plot(tune_splsda)
+  }
+}
+
+#### Make graph for publication
+highest_accuracies = 1 - lowest_errors  # Paper is written in terms of accuracy, not error. 
+df = data.frame(accuracies = highest_accuracies)
+ggplot(df, aes(accuracies)) + stat_ecdf(geom = "step") + 
+  ggtitle('Donor Diets') +
+  xlab('Highest accuracies following tuning (%)') + 
+  ylab('Cumulative distribution') +
+  xlim(c(0, 1)) + ylim(c(0, 1)) +
+  theme(text = element_text(size=8))
+ggsave('splsda_DonorDiet_random_bootstrapping_accuracies.pdf', width=6, height=5, units='cm')
+
+# Plot the lowest errors attained as a cumulative distribution plot. 
+plot(ecdf(lowest_errors * 100), verticals=TRUE, ylab='Cumulative distribution', 
+     xlab='Lowest misclassified sample rates following tuning (%)', 
+     main='Random sample group assignments')
+```
+
+# Supervised analysis: Distinguish samples based on donor exercise state
+
+As above, we optimize sPLS-DA model parameters using leave one out cross validation, attempting to distinguish recipient microbiomes based on on donor exercise state 
+
+The statistics here actually look better than we would have expected - balanced error rates  (average error per category) of around 15%. 
+However, a great many components (8) are used to achieve it, which isn't ideal. 
+Interestingly, most are built on very few taxa. 
+I am unsure why the model didn't combine these into a single dimension. 
+
+```{r }
+# Tune the sPLS-DA. This entails leave one out validation to determine the optimal number of features (keepX) to retain 
+# in each latent variable of the PLSDA. 
+# Tuning is performed one component at a time.
+group = factor(metadata_post$DonorActivity)
+tune_splsda = tune.splsda(X=post_relab, Y=group, ncomp=15, 
+                          logratio='CLR', 
+                          # Investigate number of taxa to retain. Sequence form 5..150.
+                          test.keepX=c(1, 2, 3, 4, seq(5, 50, 5)),  
+                          validation='loo',
+                          dist=c('mahalanobis.dist'),  
+                          measure='BER',  # 'BER' (balanced error rate for uneven class sizes) or 'overall'
+                          scale=TRUE,
+                          near.zero.var=TRUE,  # Recommended for microbiome data. 
+                          progressBar=FALSE,
+                          cpus=8  # Run in parallel. Adjust if you don't have this many CPUs. Set to 1 if unsure. 
+                          )
+# mixOmics documentation not clear on how to interpert this. 
+# I believe that the error rate (y axis) is of ALL the prior components, using the optimal keepX for each (they are
+# iteratively tuned). 
+# "The classification error rates for each component conditional on the last component are represented below, for all components specified in the tune function." - http://mixomics.org/case-studies/splsda-srbct/
+plot(tune_splsda)
+# Same data as in graph. One component tuned (and then added) at a time. Shows the error rate as keepX is varied. 
+print(tune_splsda$error.rate)
+# Minimum error rate found when adding each component (number of taxa informing each subsequent component is varied).
+colMins(tune_splsda$error.rate)  
+# Same as above, but incorporates only the best keepX for each component.
+print(tune_splsda$error.rate.class) 
+
+select_ncomp = which.min(colMins(tune_splsda$error.rate))
+cat('Based on optimal performance, selecting', select_ncomp, 'principal component(s) in building the sPLS-DA.\n')
+select_keepX = tune_splsda$choice.keepX[1:select_ncomp]
+select_keepX  # How many taxa inform each component of the model. 
+```
+
+
+```{r}
+group = factor(metadata_post$DonorActivity)
+post_donor_splsda = splsda(X=post_relab, Y=group, 
+                             ncomp=select_ncomp, keepX=select_keepX,  # From tuning, above. 
+                             logratio='CLR', scale=TRUE,  # Microbiome data is compositional. 
+                             near.zero.var=TRUE)  # Set to true because microbiome data contains many zeros. 
+# Access the principle components through: post_donor_splsda$variates$X
+
+ordinate(projection=post_donor_splsda, group=group, plot_title='Post-gavage: Donor', name_samples=TRUE, ellipse=TRUE, 
+         background = TRUE)
+ordinate(projection=post_donor_splsda, group=group, plot_title='Post-gavage: Donor', name_samples=TRUE, ellipse=TRUE,
+         components=c(1,3))
+#### Publication quality plot
+ordinate(projection=post_donor_splsda, group=group, plot_title='sPLS-DA: Post-gavage, Donor Activity', name_samples=FALSE, 
+         ellipse=FALSE,
+         background=TRUE,
+         col_per_group_map = col_per_group,
+         filename = 'splsda_DonorActivity_post_gavage-ANNOTATED.pdf')
+
+ordinate(projection=post_donor_splsda, group=group, plot_title='sPLS-DA: Post-gav, Donor Activity', name_samples=FALSE, 
+         ellipse=FALSE,
+         background=TRUE,
+         col_per_group_map = col_per_group,
+         dimensions_mm=c(60, 45), fontsize=8, title_fontsize=8, point_size=1.5, spartan_plot = TRUE, 
+         filename = 'splsda_DonorActivity_post_gavage.pdf')
+
+
+# Performs a leave one out-based evaluation of the model built. 
+# (Does not vary components or keepX, as done above using tune.splsda)
+post_donor_splsda_perf = perf(post_donor_splsda, validation="loo", progressBar=FALSE, auc=TRUE)
+# Tried building a splsda with ncomp=4, and confirm that accuracy suffers with the additional fourth component. 
+plot(post_donor_splsda_perf) 
+post_donor_splsda_perf$error.rate.class
+post_donor_splsda_perf$error.rate
+
+### Save loadings and stability of taxa informing each component. 
+# For more info, see comments above for "donor group" model building.
+out_dir = 'donor_activity'
+dir.create(out_dir, showWarnings=FALSE)
+
+extract_important_features_all_components(
+  model=post_donor_splsda,  # an splsda model
+  model_perf=post_donor_splsda_perf,  # Same `model``, but run through the `perf` function.
+  max_components=select_ncomp,  # How many components to explore. 
+  csv_file_prefix=paste(out_dir, '/donor_activity_taxa_', sep=''),  # Specify directory and prefix (to identify model and groups explored) for csv files. 
+  plot_loadings = FALSE,
+  feature_map=asv_taxonomy)
+```
+
+## Quantify overfitting potential
+
+Given the above results - better than expected ability to classify samples based on donor exercise state, using quite a lot of components - it is pertinent to gauge overfitting potential again.
+
+The baseline here - random class assignment - would be around 50%. 
+The best result from 20 randomization attempts offers an error rate of only 17%, which is rather low. 
+It suggests that there is some minor capacity to distinguish samples based on donor exercise state, but it is not much better than random (when capacity for overfitting is accounted for). 
+
+```{r}
+set.seed(999)  # Ensure reproducibility
+repetitions = 50
+lowest_errors = rep(1, repetitions)
+shown_plot = FALSE
+for (repetition in 1:repetitions)
+{
+  # Create a vector of four categories, and then shuffle them. 
+  categories = c(rep('A', sum(metadata_post$DonorActivity == 'Sed')),  
+                 rep('B', sum(metadata_post$DonorActivity == 'Ex'))
+                 )
+  randomised_categories = factor(sample(categories))
+  # Tune the sPLS-DA. Same methodology as has been used above. 
+  tune_splsda = tune.splsda(X=post_relab, Y=randomised_categories, ncomp=15, 
+                            logratio='CLR', scale=TRUE, near.zero.var=TRUE,
+                            test.keepX=c(1, 2, 3, 4, seq(5, 50, 5)),  
+                            validation='loo',
+                            dist='mahalanobis.dist',  
+                            measure='BER',  
+                            progressBar=FALSE,
+                            cpus=8  # Run in parallel. Adjust if you don't have this many CPUs. Set to 1 if unsure. 
+                            )
+  
+  lowest_errors[repetition] = min(tune_splsda$error.rate)
+  
+  select_ncomp = which.min(colMins(tune_splsda$error.rate))
+  
+  # Show the plot once, as illustration. 
+  if (select_ncomp >= 2 && shown_plot == FALSE)
+  {
+    shown_plot = TRUE  # Do this once only as illustration of what overfitting can look like. 
+    select_keepX = tune_splsda$choice.keepX[1:select_ncomp]  # Number of features informing each component. 
+    final_splsda = splsda(post_relab, Y=randomised_categories, ncomp=select_ncomp, 
+                        logratio='CLR', keepX=select_keepX)
+    
+    plotIndiv(final_splsda, comp = c(1, 2),
+              ind.names = TRUE,
+              ellipse = TRUE, legend = TRUE,
+              title = 'sPLSDA comps 1 & 2; RANDOMISED')
+    plot(tune_splsda)
+  }
+}
+
+#### Make graph for publication
+highest_accuracies = 1 - lowest_errors  # Paper is written in terms of accuracy, not error.
+cat('Most accuract model, following random permutation of group memberships, was ', max(highest_accuracies), '\n')
+df = data.frame(accuracies = highest_accuracies)
+ggplot(df, aes(accuracies)) + stat_ecdf(geom = "step") + 
+  ggtitle('Donor Activity') +
+  xlab('Highest accuracies following tuning (%)') + 
+  ylab('Cumulative distribution') +
+  xlim(c(0, 1)) + ylim(c(0, 1)) +
+  theme(text = element_text(size=8))
+ggsave('splsda_DonorActivity_random_bootstrapping_accuracies.pdf', width=6, height=5, units='cm')
+real_data_accuracy = 1 - min(post_donor_splsda_perf$error.rate$BER[, 'mahalanobis.dist'])
+beaten_by_random = sum(sort(highest_accuracies) > real_data_accuracy)
+cat('Random group re-assignments beat the performance of the real data (accuracy)', beaten_by_random, 'times\n')
+
+# Plot the lowest errors attained as a cumulative distribution plot. 
+plot(ecdf(lowest_errors * 100), verticals=TRUE, ylab='Cumulative distribution', 
+     xlab='Lowest misclassified sample rates following tuning (%)', 
+     main='Random sample group assignments')
+```
