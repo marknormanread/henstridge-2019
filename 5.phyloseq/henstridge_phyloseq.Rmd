@@ -169,7 +169,6 @@ ggsave("post_gavage_rarefaction_curves.pdf", height=50, width=60, units='mm')
 ```{r alpha_diversity}
 # Change the order of samples to group by Donor. 
 sd = sample_data(phylo_post)
-sd = 
 sorted_sd = sd[order(as.numeric(sd$SortOrder)), ]  # Ordered by SortOrder
 desired_col_order = rownames(sorted_sd)  
 
@@ -206,24 +205,46 @@ ggsave("post_gavage_alpha_diversity.pdf", width=70, height=40, units='mm')
 
 #### Is there any statistically significant difference between groups based on alpha diversity?
 # Ignore the warning about singletons - pretty sure this is because we use DADA2 which doesn't produce as many 
-# singletons as previous technologioes. 
+# singletons as previous technologies. 
 # Returns data frame (and renames samples starting with numbers), but preserves order of input data. 
 richness = estimate_richness(phylo_post)  # Actually used in the plot_richness function above. Same data. 
-richness$Donor = sample_data(phylo_post)$Donor  # Add a column?s
+richness$Donor = sample_data(phylo_post)$Donor  # Add a column
+richness$DonorDiet = sample_data(phylo_post)$DonorDiet
+richness$DonorActivity = sample_data(phylo_post)$DonorActivity
 
 # Perform a PERMANOVA to seek statistically significant differences in groups, in terms of alpha diversity.
 # This does not say which groups are different, only if there are differences. 
 adonis(Observed ~ Donor, data=richness, method="euclidean")  # Print to the notebook. 
 adonis(Shannon ~ Donor, data=richness, method="euclidean")  # Print to the notebook. 
 adonis(InvSimpson ~ Donor, data=richness, method="euclidean")  # Print to the notebook. 
+
+adonis(Observed ~ DonorDiet, data=richness, method="euclidean")  # Print to the notebook. 
+adonis(Shannon ~ DonorDiet, data=richness, method="euclidean")  # Print to the notebook. 
+adonis(InvSimpson ~ DonorDiet, data=richness, method="euclidean")  # Print to the notebook. 
+
+adonis(Observed ~ DonorActivity, data=richness, method="euclidean")  # Print to the notebook. 
+adonis(Shannon ~ DonorActivity, data=richness, method="euclidean")  # Print to the notebook. 
+adonis(InvSimpson ~ DonorActivity, data=richness, method="euclidean")  # Print to the notebook. 
+
 # Repeat, but save to file system. 
 sink('post_gavage_alpha_diversity_permanova.txt')
 cat('Observed taxa\n')
-adonis(Observed ~ Donor, data=richness, method="euclidean")  # Print to the notebook. 
+print(adonis(Observed ~ Donor, data=richness, method="euclidean"))
 cat('\n\nShannon taxa\n')
-adonis(Shannon ~ Donor, data=richness, method="euclidean")  # Print to the notebook. 
+print(adonis(Shannon ~ Donor, data=richness, method="euclidean"))
 cat('\n\nInverse Simpson taxa\n')
-adonis(InvSimpson ~ Donor, data=richness, method="euclidean")  # Print to the notebook. 
+print(adonis(InvSimpson ~ Donor, data=richness, method="euclidean"))
+
+cat('\n------- Donor Diet -------\n')
+print(adonis(Observed ~ DonorDiet, data=richness, method="euclidean"))
+print(adonis(Shannon ~ DonorDiet, data=richness, method="euclidean"))
+print(adonis(InvSimpson ~ DonorDiet, data=richness, method="euclidean"))
+
+cat('\n------- Donor Activity -------\n')
+print(adonis(Observed ~ DonorActivity, data=richness, method="euclidean"))
+print(adonis(Shannon ~ DonorActivity, data=richness, method="euclidean"))
+print(adonis(InvSimpson ~ DonorActivity, data=richness, method="euclidean"))
+
 sink()
 ```
 

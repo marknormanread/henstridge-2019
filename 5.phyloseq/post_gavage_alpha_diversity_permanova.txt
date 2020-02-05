@@ -1,0 +1,140 @@
+Observed taxa
+
+Call:
+adonis(formula = Observed ~ Donor, data = richness, method = "euclidean") 
+
+Permutation: free
+Number of permutations: 999
+
+Terms added sequentially (first to last)
+
+          Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
+Donor      3    9350.1  3116.7  6.8155 0.40531  0.002 **
+Residuals 30   13719.0   457.3         0.59469          
+Total     33   23069.1                 1.00000          
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+
+Shannon taxa
+
+Call:
+adonis(formula = Shannon ~ Donor, data = richness, method = "euclidean") 
+
+Permutation: free
+Number of permutations: 999
+
+Terms added sequentially (first to last)
+
+          Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
+Donor      3    1.6562 0.55206  5.5484 0.35685  0.004 **
+Residuals 30    2.9850 0.09950         0.64315          
+Total     33    4.6412                 1.00000          
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+
+Inverse Simpson taxa
+
+Call:
+adonis(formula = InvSimpson ~ Donor, data = richness, method = "euclidean") 
+
+Permutation: free
+Number of permutations: 999
+
+Terms added sequentially (first to last)
+
+          Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)  
+Donor      3    260.89  86.963  4.3442 0.30286  0.012 *
+Residuals 30    600.54  20.018         0.69714         
+Total     33    861.42                 1.00000         
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+------- Donor Diet -------
+
+Call:
+adonis(formula = Observed ~ DonorDiet, data = richness, method = "euclidean") 
+
+Permutation: free
+Number of permutations: 999
+
+Terms added sequentially (first to last)
+
+          Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)    
+DonorDiet  1    8753.1  8753.1  19.566 0.37943  0.001 ***
+Residuals 32   14315.9   447.4         0.62057           
+Total     33   23069.1                 1.00000           
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+Call:
+adonis(formula = Shannon ~ DonorDiet, data = richness, method = "euclidean") 
+
+Permutation: free
+Number of permutations: 999
+
+Terms added sequentially (first to last)
+
+          Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)    
+DonorDiet  1    1.4190 1.41897  14.092 0.30573  0.001 ***
+Residuals 32    3.2222 0.10069         0.69427           
+Total     33    4.6412                 1.00000           
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+Call:
+adonis(formula = InvSimpson ~ DonorDiet, data = richness, method = "euclidean") 
+
+Permutation: free
+Number of permutations: 999
+
+Terms added sequentially (first to last)
+
+          Df SumsOfSqs MeanSqs F.Model     R2 Pr(>F)  
+DonorDiet  1    142.83 142.827  6.3603 0.1658  0.016 *
+Residuals 32    718.60  22.456         0.8342         
+Total     33    861.42                 1.0000         
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+------- Donor Activity -------
+
+Call:
+adonis(formula = Observed ~ DonorActivity, data = richness, method = "euclidean") 
+
+Permutation: free
+Number of permutations: 999
+
+Terms added sequentially (first to last)
+
+              Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)
+DonorActivity  1      96.3    96.3 0.13414 0.00417  0.715
+Residuals     32   22972.8   717.9         0.99583       
+Total         33   23069.1                 1.00000       
+
+Call:
+adonis(formula = Shannon ~ DonorActivity, data = richness, method = "euclidean") 
+
+Permutation: free
+Number of permutations: 999
+
+Terms added sequentially (first to last)
+
+              Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)
+DonorActivity  1    0.0477 0.047734 0.33253 0.01028  0.558
+Residuals     32    4.5934 0.143545         0.98972       
+Total         33    4.6412                  1.00000       
+
+Call:
+adonis(formula = InvSimpson ~ DonorActivity, data = richness,      method = "euclidean") 
+
+Permutation: free
+Number of permutations: 999
+
+Terms added sequentially (first to last)
+
+              Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)
+DonorActivity  1     13.32  13.317 0.50246 0.01546  0.502
+Residuals     32    848.11  26.503         0.98454       
+Total         33    861.42                 1.00000       
